@@ -1,0 +1,41 @@
+import torch
+import numpy as np
+import os
+from model import VBPR
+
+def load_features(feature_file, device):
+    if os.path.isfile(feature_file):
+        return torch.from_numpy(np.load(feature_file, allow_pickle=True)).type(torch.FloatTensor).to(device)
+    else:
+        return None
+
+def train_model(model_config):
+    # Load features
+    dataset_path = os.path.abspath(model_config['data_path'] + model_config['dataset'])
+    v_feat_file = os.path.join(dataset_path, model_config['vision_feature_file'])
+    t_feat_file = os.path.join(dataset_path, model_config['text_feature_file'])
+    v_feat = load_features(v_feat_file, model_config['device'])
+    t_feat = load_features(t_feat_file, model_config['device'])
+
+    # Initialize the model
+    model = VBPR(model_config, v_feat=v_feat, t_feat=t_feat)
+    model.to(model_config['device'])
+
+    # Training loop
+    for epoch in range(model_config['num_epochs']):
+        # Implement training logic
+        pass
+
+if __name__ == "__main__":
+    model_config = {
+        'data_path': './data/',
+        'dataset': 'your_dataset',
+        'vision_feature_file': 'vision_features.npy',
+        'text_feature_file': 'text_features.npy',
+        'device': 'cuda',  # or 'cpu'
+        'embedding_size': 100,
+        'num_users': 1000,
+        'num_items': 500,
+        'num_epochs': 20
+    }
+    train_model(model_config)
