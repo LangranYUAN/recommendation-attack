@@ -7,7 +7,7 @@ import torch
 
 
 class BasicModel(nn.Module):
-    def __init__(self, model_config, dataloader ):
+    def __init__(self, model_config):
         super(BasicModel, self).__init__()
         self.model_fig = model_config
         self.name = model_config['name']
@@ -16,108 +16,97 @@ class BasicModel(nn.Module):
         self.batch_size = model_config['train_batch_size']
         self.num_users = model_config['num_users']
         self.num_items = model_config['num_items']
-        self.n_users = dataloader.dataset.get_user_num()
-        self.n_items = dataloader.dataset.get_item_num()
+        self.n_users = self.dataset.n_users
+        self.n_items = self.dataset.n_items
 
         self.v_feat, self.t_feat = None, None
 
-    def abstract_calculate_loss(self, user_score, pos_item_score, neg_item_score):
-        mf_loss = self.loss(pos_item_score, neg_item_score)
-        reg_loss = self.reg_loss(user_score, pos_item_score, neg_item_score)
-        return mf_loss, reg_loss
+    def get_rep(self):
+        raise NotImplementedError
 
-    def get_user_item_embeddings(self, interaction):
-        user = interaction[0]
-        user_embeddings, item_embeddings = self.forward()
-        user_e = user_embeddings[user, :]
-        all_item_e = item_embeddings
-        return user_e, all_item_e
+    def bpr_forward(self, pos_items, neg_items):
+        user_embeddings, item_embeddings = self.get_rep()
+
+        pos_item_embeddings = item_embeddings[pos_items]
+        neg_item_embeddings = item_embeddings[neg_items]
+
+        pos_scores = torch.mul(user_embeddings, pos_item_embeddings).sum(dim=1)
+        neg_scores = torch.mul(user_embeddings, neg_item_embeddings).sum(dim=1)
+
+        loss = -torch.mean(torch.log(torch.sigmoid(pos_scores - neg_scores)))
+
+        l2_norm_sq_user = torch.norm(user_embeddings, p=2, dim=1) ** 2
+        l2_norm_sq_pos_items = torch.norm(pos_item_embeddings, p=2, dim=1) ** 2
+        l2_norm_sq_neg_items = torch.norm(neg_item_embeddings, p=2, dim=1) ** 2
+
+        reg_loss = self.reg_weight * (
+                    l2_norm_sq_user.mean() + l2_norm_sq_pos_items.mean() + l2_norm_sq_neg_items.mean())
+
+        total_loss = loss + reg_loss
+        return total_loss
+
+    def predict(self,users):
+        user_embeddings, item_embeddings = self.get_rep()
+        user_e = user_embeddings[users, :]
+        scores = torch.matmul(user_e, item_embeddings.t())
+        return scores
+
 
 class VBPR(BasicModel):
-    def __init__(self, model_config, dataloader):
-        super(VBPR, self).__init__(model_config, dataloader)
-        dataset_path = os.path.abspath(model_config['data_path'] + model_config['dataset'])
-        # 构建视觉、文本特征文件的路径
-        v_feat_file_path = os.path.join(dataset_path, model_config['vision_feature_file'])
-        t_feat_file_path = os.path.join(dataset_path, model_config['text_feature_file'])
-        # 加载视觉、文本特征
-        if os.path.isfile(v_feat_file_path):
-            self.v_feat = torch.from_numpy(np.load(v_feat_file_path, allow_pickle=True)).type(torch.FloatTensor).to(
-                self.device)
-        if os.path.isfile(t_feat_file_path):
-            self.t_feat = torch.from_numpy(np.load(t_feat_file_path, allow_pickle=True)).type(torch.FloatTensor).to(
-                self.device)
-
-        assert self.v_feat is not None or self.t_feat is not None, 'Features all NONE'
-
+    def __init__(self, model_config, v_feat=None, t_feat=None):
+        super(VBPR, self).__init__(model_config)
         self.u_embedding_size = self.i_embedding_size = model_config['embedding_size']
-        self.reg_weight = model_config['reg_weight']  # float32 type: the weight decay for l2 normalizaton
 
-        # define layers and loss
-        self.u_embedding = nn.Parameter(nn.init.xavier_uniform_(torch.empty(self.n_users, self.u_embedding_size * 2)))
-        self.i_embedding = nn.Parameter(nn.init.xavier_uniform_(torch.empty(self.n_items, self.i_embedding_size)))
-        if self.v_feat is not None and self.t_feat is not None:
-            self.item_raw_features = torch.cat((self.t_feat, self.v_feat), -1)
-        elif self.v_feat is not None:
-            self.item_raw_features = self.v_feat
-        else:
-            self.item_raw_features = self.t_feat
+        # Initialize embeddings
+        self.u_embedding = nn.Parameter(
+            nn.init.xavier_uniform_(torch.empty(model_config['num_users'], self.u_embedding_size * 2)))
+        self.i_embedding = nn.Parameter(
+            nn.init.xavier_uniform_(torch.empty(model_config['num_items'], self.i_embedding_size)))
 
+        # Feature handling
+        self.v_feat = v_feat
+        self.t_feat = t_feat
+        self.item_raw_features = self._combine_features()
+
+        # Define layers
         self.item_linear = nn.Linear(self.item_raw_features.shape[1], self.i_embedding_size)
 
-    def forward(self, item_raw_features, dropout=0.0):
-        item_embeddings = self.item_linear(item_raw_features)
+    def _combine_features(self):
+        if self.v_feat is not None and self.t_feat is not None:
+            return torch.cat((self.t_feat, self.v_feat), -1)
+        elif self.v_feat is not None:
+            return self.v_feat
+        elif self.t_feat is not None:
+            return self.t_feat
+        else:
+            return None
+
+    def get_rep(self,  dropout=0.0):
+        item_embeddings = self.item_linear(self.item_raw_features)
         item_embeddings = torch.cat((self.i_embedding, item_embeddings), dim=1)
-        user_e = F.dropout(self.u_embedding, dropout)
-        item_e = F.dropout(item_embeddings, dropout)
-        return user_e, item_e
+        user_embeddings = F.dropout(self.u_embedding, dropout)
+        return user_embeddings, item_embeddings
 
-    def calculate_loss(self, interaction):
-        user = interaction[0]
-        pos_item = interaction[1]
-        neg_item = interaction[2]
 
-        user_embeddings, item_embeddings = self.forward()
-        user_e = user_embeddings[user, :]
-        pos_e = item_embeddings[pos_item, :]
-        neg_e = item_embeddings[neg_item, :]
-        pos_item_score, neg_item_score = torch.mul(user_e, pos_e).sum(dim=1), torch.mul(user_e, neg_e).sum(dim=1)
-
-        mf_loss, reg_loss = self.abstract_calculate_loss(user_e, pos_item_score, neg_item_score)
-
-        loss = mf_loss + self.reg_weight * reg_loss
-        return loss
-
-    def full_sort_predict(self, interaction):
-        user_e, all_item_e = self.get_user_item_embeddings(interaction)
-        score = torch.matmul(user_e, all_item_e.transpose(0, 1))
-        return score
 
 class MMGCN(BasicModel):
-    def __init__(self, model_config, dataset):
-        super(MMGCN, self).__init__(model_config, dataset)
-        self.num_user = self.n_users
-        self.num_user = self.n_users
-        self.num_item = self.n_items
+    def __init__(self, model_config,dataset):
+        super(MMGCN, self).__init__(model_config)
         dim_x = model_config['embedding_size']
         num_layer = model_config['n_layers']
-        self.aggr_mode = 'mean'
-        self.concate = 'False'
         has_id = True
         self.weight = torch.tensor([[1.0], [-1.0]]).to(self.device)
-        self.reg_weight = model_config['reg_weight']
 
-        # packing interaction in training into edge_index
         train_interactions = dataset.inter_matrix(form='coo').astype(np.float32)
         edge_index = torch.tensor(self.pack_edge_index(train_interactions), dtype=torch.long)
         self.edge_index = edge_index.t().contiguous().to(self.device)
-        self.edge_index = torch.cat((self.edge_index, self.edge_index[[1, 0]]), dim=1)
+        self.edge_index = torch.cat((self.edge_index, self.edge_index[[1, 0], :]), dim=1)
         self.num_modal = 0
 
         if self.v_feat is not None:
             self.v_gcn = GCN(self.edge_index, self.batch_size, self.num_user, self.num_item, self.v_feat.size(1), dim_x,
                              self.aggr_mode,
-                             self.concate, num_layer=num_layer, has_id=has_id, dim_latent=256, device=self.device)
+                             self.concate, num_layer=num_layer, has_id=has_id, device=self.device)
             self.num_modal += 1
 
         if self.t_feat is not None:
@@ -127,9 +116,8 @@ class MMGCN(BasicModel):
 
         self.id_embedding = nn.init.xavier_normal_(
             torch.rand((self.num_user + self.num_item, dim_x), requires_grad=True)).to(self.device)
-        self.result = nn.init.xavier_normal_(torch.rand((self.num_user + self.num_item, dim_x))).to(self.device)
 
-    def forward(self):
+    def get_rep(self):
         representation = None
         if self.v_feat is not None:
             representation = self.v_gcn(self.v_feat, self.id_embedding)
@@ -140,42 +128,13 @@ class MMGCN(BasicModel):
                 representation += self.t_gcn(self.t_feat, self.id_embedding)
 
         representation /= self.num_modal
-
-        self.result = representation
-        return representation
+        return self.id_embedding, representation
 
     def pack_edge_index(self, inter_mat):
         rows = inter_mat.row
         cols = inter_mat.col + self.n_users
         return np.column_stack((rows, cols))
 
-    def calculate_loss(self, interaction):
-        batch_users = interaction[0]
-        pos_items = interaction[1] + self.n_users
-        neg_items = interaction[2] + self.n_users
-
-        user_tensor = batch_users.repeat_interleave(2)
-        stacked_items = torch.stack((pos_items, neg_items))
-        item_tensor = stacked_items.t().contiguous().view(-1)
-
-        out = self.forward()
-        user_score = out[user_tensor]
-        item_score = out[item_tensor]
-        score = torch.sum(user_score * item_score, dim=1).view(-1, 2)
-        loss = -torch.mean(torch.log(torch.sigmoid(torch.matmul(score, self.weight))))
-        reg_embedding_loss = (self.id_embedding[user_tensor] ** 2 + self.id_embedding[item_tensor] ** 2).mean()
-        if self.v_feat is not None:
-            reg_embedding_loss += (self.v_gcn.preference ** 2).mean()
-        reg_loss = self.reg_weight * reg_embedding_loss
-        return loss + reg_loss
-
-    def full_sort_predict(self, interaction):
-        user_tensor = self.result[:self.n_users]
-        item_tensor = self.result[self.n_users:]
-
-        temp_user_tensor = user_tensor[interaction[0], :]
-        score_matrix = torch.matmul(temp_user_tensor, item_tensor.t())
-        return score_matrix
 
 class Abstract_GCN(nn.Module):
     def __init__(self, in_channels, out_channels, aggr='mean'):
