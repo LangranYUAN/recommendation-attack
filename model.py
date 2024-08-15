@@ -1,7 +1,5 @@
-
 import torch.nn as nn
 import torch.nn.functional as F
-import os
 import numpy as np
 import torch
 
@@ -24,31 +22,26 @@ class BasicModel(nn.Module):
     def get_rep(self):
         raise NotImplementedError
 
-    def bpr_forward(self, pos_items, neg_items):
-        user_embeddings, item_embeddings = self.get_rep()
+    def bpr_forward(self, users,  pos_items, neg_items):
+        rep = self.get_rep()
+        user_rep = rep[users, :]
+        pos_item_rep = rep[self.n_users + pos_items, :]
+        neg_item_rep = rep[self.n_users + neg_items, :]
 
-        pos_item_embeddings = item_embeddings[pos_items]
-        neg_item_embeddings = item_embeddings[neg_items]
+        l2_norm_sq = torch.norm(user_rep, p=2, dim=1) ** 2 + \
+                     torch.norm(pos_item_rep, p=2, dim=1) ** 2 + \
+                     torch.norm(neg_item_rep, p=2, dim=1) ** 2
 
-        pos_scores = torch.mul(user_embeddings, pos_item_embeddings).sum(dim=1)
-        neg_scores = torch.mul(user_embeddings, neg_item_embeddings).sum(dim=1)
+        if self.v_feat is not None and hasattr(self, 'v_gcn'):
+            l2_norm_sq += torch.norm(self.v_gcn.preference, p=2) ** 2
 
-        loss = -torch.mean(torch.log(torch.sigmoid(pos_scores - neg_scores)))
-
-        l2_norm_sq_user = torch.norm(user_embeddings, p=2, dim=1) ** 2
-        l2_norm_sq_pos_items = torch.norm(pos_item_embeddings, p=2, dim=1) ** 2
-        l2_norm_sq_neg_items = torch.norm(neg_item_embeddings, p=2, dim=1) ** 2
-
-        reg_loss = self.reg_weight * (
-                    l2_norm_sq_user.mean() + l2_norm_sq_pos_items.mean() + l2_norm_sq_neg_items.mean())
-
-        total_loss = loss + reg_loss
-        return total_loss
+        return user_rep, pos_item_rep, neg_item_rep, l2_norm_sq
 
     def predict(self,users):
-        user_embeddings, item_embeddings = self.get_rep()
-        user_e = user_embeddings[users, :]
-        scores = torch.matmul(user_e, item_embeddings.t())
+        rep = self.get_rep()
+        user_rep = rep[users, :]
+        all_items_rep = rep[self.n_users:, :]
+        scores = torch.mm(user_rep, all_items_rep.t())
         return scores
 
 
@@ -82,15 +75,14 @@ class VBPR(BasicModel):
             return None
 
     def get_rep(self,  dropout=0.0):
-        item_embeddings = self.item_linear(self.item_raw_features)
-        item_embeddings = torch.cat((self.i_embedding, item_embeddings), dim=1)
-        user_embeddings = F.dropout(self.u_embedding, dropout)
-        return user_embeddings, item_embeddings
+        user_rep = F.dropout(self.u_embedding, dropout)
+        item_rep = self.item_linear(self.item_raw_features)
+        return torch.cat((user_rep, item_rep), dim=1)
 
 
 
 class MMGCN(BasicModel):
-    def __init__(self, model_config,dataset):
+    def __init__(self, model_config, dataset):
         super(MMGCN, self).__init__(model_config)
         dim_x = model_config['embedding_size']
         num_layer = model_config['n_layers']
@@ -102,6 +94,7 @@ class MMGCN(BasicModel):
         self.edge_index = edge_index.t().contiguous().to(self.device)
         self.edge_index = torch.cat((self.edge_index, self.edge_index[[1, 0], :]), dim=1)
         self.num_modal = 0
+
 
         if self.v_feat is not None:
             self.v_gcn = GCN(self.edge_index, self.batch_size, self.num_user, self.num_item, self.v_feat.size(1), dim_x,
@@ -128,7 +121,7 @@ class MMGCN(BasicModel):
                 representation += self.t_gcn(self.t_feat, self.id_embedding)
 
         representation /= self.num_modal
-        return self.id_embedding, representation
+        return representation
 
     def pack_edge_index(self, inter_mat):
         rows = inter_mat.row
@@ -152,13 +145,10 @@ class Abstract_GCN(nn.Module):
             raise NotImplementedError(f"Aggregation method {self.aggr} not implemented")
         return self.linear(out)
 
-class GCN(nn.Module):
-    def __init__(self, edge_index, batch_size, num_user, num_item, dim_feat, dim_id, aggr_mode, concate, num_layer,
-                 has_id, dim_latent=None, device='cpu'):
-        super(GCN, self).__init__()
-        self.batch_size = batch_size
-        self.num_user = num_user
-        self.num_item = num_item
+class GCN(BasicModel):
+    def __init__(self, model_config, edge_index, dim_feat, dim_id, aggr_mode, concate, num_layer,
+                 has_id, dim_latent=None):
+        super(GCN, self).__init__(model_config)
         self.dim_id = dim_id
         self.dim_feat = dim_feat
         self.dim_latent = dim_latent
@@ -167,9 +157,9 @@ class GCN(nn.Module):
         self.concate = concate
         self.num_layer = num_layer
         self.has_id = has_id
-        self.device = device
 
-        self.preference = nn.init.xavier_normal_(torch.rand((num_user, self.dim_latent or self.dim_feat), requires_grad=True)).to(self.device)
+
+        self.preference = nn.init.xavier_normal_(torch.rand((self.num_user, self.dim_latent or self.dim_feat), requires_grad=True)).to(self.device)
         self.MLP = nn.Linear(self.dim_feat, self.dim_latent) if self.dim_latent else None
 
         self.layers = nn.ModuleList()
