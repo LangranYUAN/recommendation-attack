@@ -7,15 +7,11 @@ import torch
 class BasicModel(nn.Module):
     def __init__(self, model_config):
         super(BasicModel, self).__init__()
-        self.model_fig = model_config
         self.name = model_config['name']
         self.device = model_config['device']
         self.dataset = model_config['dataset']
         self.n_users = self.dataset.n_users
         self.n_items = self.dataset.n_items
-
-        self.v_feat, self.t_feat = None, None
-
         self.init_parameters()
 
     def init_parameters(self):
@@ -24,7 +20,7 @@ class BasicModel(nn.Module):
     def get_rep(self):
         raise NotImplementedError
 
-    def bpr_forward(self, users,  pos_items, neg_items):
+    def bpr_forward(self, users, pos_items, neg_items):
         rep = self.get_rep()
         user_rep = rep[users, :]
         pos_item_rep = rep[self.n_users + pos_items, :]
@@ -39,7 +35,7 @@ class BasicModel(nn.Module):
 
         return user_rep, pos_item_rep, neg_item_rep, l2_norm_sq
 
-    def predict(self,users):
+    def predict(self, users):
         rep = self.get_rep()
         user_rep = rep[users, :]
         all_items_rep = rep[self.n_users:, :]
@@ -48,15 +44,13 @@ class BasicModel(nn.Module):
 
 
 class VBPR(BasicModel):
-    def __init__(self, model_config, v_feat=None, t_feat=None):
+    def __init__(self, model_config):
         super(VBPR, self).__init__(model_config)
-        self.v_feat = v_feat
-        self.t_feat = t_feat
+        self.v_feat = model_config['v_feat']
+        self.t_feat = model_config['t_feat']
 
-        # load parameters info
         self.embedding_size = model_config['embedding_size']
 
-        # Define layers
         if self.v_feat is not None and self.t_feat is not None:
             self.item_raw_features = torch.cat((self.t_feat, self.v_feat), -1)
         elif self.v_feat is not None:
@@ -80,9 +74,9 @@ class VBPR(BasicModel):
             nn.init.zeros_(self.item_linear.bias)
 
     def get_rep(self, dropout=0.0):
-        user_rep = F.dropout(self.u_embedding, dropout)  # 用户嵌入
-        item_feat_rep = self.item_linear(self.item_raw_features)  # 物品动态特征表示
-        item_emb_rep = F.dropout(self.i_embedding, dropout)  # 物品静态嵌入表示
+        user_rep = F.dropout(self.u_embedding, dropout)
+        item_feat_rep = self.item_linear(self.item_raw_features)
+        item_emb_rep = F.dropout(self.i_embedding, dropout)
 
         # 合并用户表示和物品表示
         item_rep = torch.cat((item_emb_rep, item_feat_rep), dim=1)
@@ -92,31 +86,39 @@ class VBPR(BasicModel):
         user_rep, item_rep = self.get_rep(dropout)
         return user_rep, item_rep
 
+
 class MMGCN(BasicModel):
-    def __init__(self, model_config, dataset):
+    def __init__(self, model_config):
         super(MMGCN, self).__init__(model_config)
-        dim_x = model_config['embedding_size']
         self.weight = torch.tensor([[1.0], [-1.0]]).to(self.device)
 
-        train_interactions = dataset.inter_matrix(form='coo').astype(np.float32)
+        train_interactions = model_config['dataset'].inter_matrix(form='coo').astype(np.float32)
+
         edge_index = torch.tensor(self.pack_edge_index(train_interactions), dtype=torch.long)
         self.edge_index = edge_index.t().contiguous().to(self.device)
         self.edge_index = torch.cat((self.edge_index, self.edge_index[[1, 0], :]), dim=1)
         self.num_modal = 0
 
-
+        gcn_config = {
+            'edge_index': self.edge_index,
+            'num_user': self.n_users,
+            'num_item': self.n_items,
+            'dim_input': self.v_feat.size(1) if self.v_feat is not None else None,
+            'dim_output': self.dim_x,
+            'aggr_mode': self.aggr_mode,
+            'concate': self.concate,
+            'num_layer': self.num_layer
+        }
         if self.v_feat is not None:
-            self.v_gcn = GCN(self.edge_index, self.num_user, self.v_feat.size(1), dim_x,
-                             self.aggr_mode, self.concate, self.num_layer)
+            self.v_gcn = GCN(gcn_config)
             self.num_modal += 1
 
         if self.t_feat is not None:
-            self.t_gcn = GCN(self.edge_index, self.num_user, self.num_item, self.t_feat.size(1), dim_x,
-                             self.aggr_mode, self.concate, self.num_layer)
+            self.t_gcn = GCN(gcn_config)
             self.num_modal += 1
 
         self.id_embedding = nn.init.xavier_normal_(
-            torch.rand((self.num_user + self.num_item, dim_x), requires_grad=True)).to(self.device)
+            torch.rand((self.num_user + self.num_item, self.dim_x), requires_grad=True)).to(self.device)
 
     def get_rep(self):
         representation = None
@@ -153,17 +155,20 @@ class Abstract_GCN(nn.Module):
             raise NotImplementedError(f"Aggregation method {self.aggr} not implemented")
         return self.linear(out)
 
+
 class GCN(BasicModel):
-    def __init__(self, edge_index, dim_input, dim_output, concate, num_layer,
-                 has_id, dim_latent):
-        super(GCN, self).__init__()
-        self.dim_output = dim_output
-        self.dim_input = dim_input
-        self.dim_latent = dim_latent
-        self.edge_index = edge_index
-        self.concate = concate
-        self.num_layer = num_layer
-        self.has_id = has_id
+    def __init__(self, model_config):
+        super(GCN, self).__init__(model_config)
+        self.edge_index = model_config['edge_index']
+        self.num_user = model_config['num_user']
+        self.num_item = model_config['num_item']
+        self.dim_output = model_config['dim_output']
+        self.dim_input = model_config['dim_input']
+        self.dim_latent = model_config['dim_latent']
+        self.aggr_mode = model_config['aggr_mode']
+        self.concate = model_config['concate']
+        self.num_layer = model_config['num_layer']
+
 
         self.preference = nn.Embedding(self.num_user, self.dim_latent or self.dim_input).to(self.device)
         nn.init.xavier_normal_(self.preference.weight)
@@ -173,7 +178,7 @@ class GCN(BasicModel):
         self.linears = nn.ModuleList()
         self.merge_layers = nn.ModuleList()
 
-        for i in range(num_layer):
+        for i in range(self.num_layer):
             dim_in = self.dim_latent if self.dim_latent and i == 0 else self.dim_output
             dim_out = self.dim_output
             self.gcn_layers.append(Abstract_GCN(dim_in, dim_out))
