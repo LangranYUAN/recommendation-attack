@@ -3,6 +3,7 @@ import torch
 from torch.utils.data import Dataset, random_split
 import random
 
+
 class BaseDataset(Dataset):
     def __init__(self, dataset_config, interactions):
         print(dataset_config)
@@ -15,8 +16,9 @@ class BaseDataset(Dataset):
         self.interactions = interactions
         self.n_users = np.max(interactions[:, 0]) + 1
         self.n_items = np.max(interactions[:, 1]) + 1
-        self.train_data = self._generate_train_data()
-        self.val_data = {}
+        self.train_data = None  # 初始化为 None
+        self.val_data = None
+        self.split()
 
     def _generate_train_data(self):
         train_data = {}
@@ -27,7 +29,7 @@ class BaseDataset(Dataset):
         return train_data
 
     def get_negative_samples(self, user, num_samples):
-        positive_items = self.train_data.get(user, set())
+        positive_items = self.train_data[user]
         negative_items = []
         while len(negative_items) < num_samples:
             item = random.randint(0, self.n_items - 1)
@@ -50,6 +52,5 @@ class BaseDataset(Dataset):
     def split(self):
         train_size = int(len(self.interactions) * self.split_ratio)
         val_size = len(self.interactions) - train_size
-        train_set, val_set = random_split(self, [train_size, val_size])
-        return train_set, val_set
-
+        self.train_data, self.val_data = random_split(self.interactions, [train_size, val_size])
+        self.train_data = self._generate_train_data()
