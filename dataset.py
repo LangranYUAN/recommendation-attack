@@ -1,11 +1,12 @@
 import numpy as np
 import torch
-from torch.utils.data import Dataset, random_split
+import pandas as pd
+from torch.utils.data import random_split
 import random
 
 
-class BaseDataset(Dataset):
-    def __init__(self, dataset_config, interactions):
+class Dataset:
+    def __init__(self, dataset_config):
         print(dataset_config)
         self.name = dataset_config['name']
         self.device = dataset_config['device']
@@ -13,10 +14,20 @@ class BaseDataset(Dataset):
         self.negative_sample_ratio = dataset_config.get('negative_sample_ratio', 1)
         self.shuffle = dataset_config.get('shuffle', False)
         self.min_interactions = dataset_config.get('min_inter')
-        self.interactions = interactions
-        self.n_users = np.max(interactions[:, 0]) + 1
-        self.n_items = np.max(interactions[:, 1]) + 1
-        self.train_data = None  # 初始化为 None
+
+        self.image_feat_path = dataset_config['image_feat_path']
+        self.text_feat_path = dataset_config['text_feat_path']
+        self.interactions_path = dataset_config['interactions_path']
+        self.interactions = pd.read_csv(self.interactions_path).values
+
+        if self.image_feat_path:
+            self.v_feat = torch.tensor(np.load(self.image_feat_path))
+        if self.text_feat_path:
+            self.t_feat = torch.tensor(np.load(self.text_feat_path))
+
+        self.n_users = np.max(self.interactions[:, 0]) + 1
+        self.n_items = np.max(self.interactions[:, 1]) + 1
+        self.train_data = None
         self.val_data = None
         self.split()
 
@@ -54,3 +65,4 @@ class BaseDataset(Dataset):
         val_size = len(self.interactions) - train_size
         self.train_data, self.val_data = random_split(self.interactions, [train_size, val_size])
         self.train_data = self._generate_train_data()
+
