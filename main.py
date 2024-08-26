@@ -1,48 +1,61 @@
-import pandas as pd
 import torch
-import numpy as np
-from dataset import BaseDataset
+from dataset import Dataset
 from model import VBPR, MMGCN
 from trainer import BPRTrainer
+import torch.optim as optim
+from torch.utils.data import DataLoader
 
 
 def main():
-    model_config = {
-        'name': 'VBPR',
-        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
-        'dataset': None,
-        'embedding_size': 64,
-    }
-
     dataset_config = {
-        'name': 'YourDatasetName',
-        'device': model_config['device'],
+        'name': 'elec',
+        'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'split_ratio': 0.8,
         'negative_sample_ratio': 1,
         'shuffle': True,
-        'min_inter': 10
+        'min_inter': 10,
+        'image_feat_path': 'data/elec/image_feat.npy',
+        'text_feat_path': 'data/elec/text_feat.npy',
+        'interactions_path': 'data/elec/elec.inter'
     }
 
+    dataset = Dataset(dataset_config)
 
-    interactions = pd.read_csv('data/elec/elec.inter').values
-    dataset = BaseDataset(dataset_config, interactions)
-    model_config['dataset'] = dataset
-
-
-    v_feat = torch.tensor(np.load('data/elec/image_feat.npy'))
-    t_feat = torch.tensor(np.load('data/elec/text_feat.npy'))
+    model_config = {
+        'name': 'VBPR',
+        'device':  dataset_config['device'],
+        'dataset': 'elec',
+        'embedding_size': 64,
+        'v_feat': dataset.v_feat,
+        't_feat': dataset.t_feat,
+        'dim_input': 128,
+        'dim_output': 64,
+        'concate': True,
+        'has_id': False,
+        'num_layer': 3,
+        'dim_latent': 256,
+        'aggr_mode': 'mean'
+    }
 
     if model_config['name'] == 'VBPR':
-        model = VBPR(model_config, v_feat=v_feat, t_feat=t_feat)
+        model = VBPR(model_config)
     elif model_config['name'] == 'MMGCN':
-        model = MMGCN(model_config, dataset)
+        model = MMGCN(model_config)
 
     model.to(model_config['device'])
 
+    optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
+    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
 
-    trainer = BPRTrainer(model, lr=0.001, batch_size=32, reg_weight=0.01, dataset=dataset)
+    trainer_config = {
+        'model': model,
+        'optimizer': optimizer,
+        'dataloader': dataloader,
+        'reg_weight': 0.01
+    }
+
+    trainer = BPRTrainer(trainer_config)
     trainer.train(epochs=10)
-
 
 if __name__ == "__main__":
     main()
