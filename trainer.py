@@ -1,13 +1,14 @@
 import torch
 import torch.nn.functional as F
 
+
 class BPRTrainer:
-    def __init__(self, model, optimizer, dataloader, reg_weight=0.01):
-        self.model = model
-        self.optimizer = optimizer
-        self.dataloader = dataloader
-        self.reg_weight = reg_weight
-        self.device = next(model.parameters()).device
+    def __init__(self, trainer_config):
+        self.model = trainer_config['model']
+        self.optimizer = trainer_config['optimizer']
+        self.dataloader = trainer_config['dataloader']
+        self.reg_weight = trainer_config['reg_weight']
+        self.device = next(self.model.parameters()).device
 
     def train_epoch(self):
         self.model.train()
@@ -34,14 +35,14 @@ class BPRTrainer:
             loss.backward()
             self.optimizer.step()
 
-            # 累加损失
             total_loss += loss.item()
 
-        return total_loss / len(self.dataloader)
+        return total_loss
 
     def train(self, epochs):
         for epoch in range(epochs):
             avg_loss = self.train_epoch()
-            print(f"Epoch {epoch+1}, Average Loss: {avg_loss}")
+            print(f"Epoch {epoch + 1}, Average Loss: {avg_loss}")
+
 
 
