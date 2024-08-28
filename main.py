@@ -1,5 +1,5 @@
 import torch
-from dataset import Dataset
+from dataset import AmazonDataset
 from model import VBPR, MMGCN
 from trainer import BPRTrainer
 import torch.optim as optim
@@ -8,18 +8,16 @@ from torch.utils.data import DataLoader
 
 def main():
     dataset_config = {
-        'name': 'elec',
+        'name': 'Elec',
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'split_ratio': 0.8,
         'negative_sample_ratio': 1,
-        'shuffle': True,
-        'min_inter': 10,
+        'min_inter': 5,
         'image_feat_path': 'data/elec/image_feat.npy',
         'text_feat_path': 'data/elec/text_feat.npy',
         'interactions_path': 'data/elec/elec.inter'
     }
-
-    dataset = Dataset(dataset_config)
+    dataset = AmazonDataset(dataset_config)
 
     model_config = {
         'name': 'VBPR',
