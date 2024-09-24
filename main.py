@@ -4,11 +4,12 @@ from model import VBPR, MMGCN
 from trainer import BPRTrainer
 import torch.optim as optim
 from torch.utils.data import DataLoader
+from topk_evaluator import TopKEvaluator
 
 
 def main():
     dataset_config = {
-        'name': 'Elec',
+        'name': 'elec',
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'split_ratio': 0.8,
         'negative_sample_ratio': 1,
@@ -19,10 +20,12 @@ def main():
     }
     dataset = AmazonDataset(dataset_config)
 
+    train_dataset, eval_dataset = dataset.split(dataset_config['split_ratio'])
+
     model_config = {
         'name': 'VBPR',
         'device':  dataset_config['device'],
-        'dataset': 'elec',
+        'dataset': dataset,
         'embedding_size': 64,
         'v_feat': dataset.v_feat,
         't_feat': dataset.t_feat,
@@ -43,17 +46,27 @@ def main():
     model.to(model_config['device'])
 
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
-    dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
+
+    dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
+    eval_dataloader = DataLoader(eval_dataset, batch_size=32, shuffle=False)
+
+    config = {
+        'metrics': ['recall', 'precision', 'ndcg'],
+        'topk': [10, 20]
+    }
+    evaluator = TopKEvaluator(config=config)
 
     trainer_config = {
         'model': model,
         'optimizer': optimizer,
         'dataloader': dataloader,
-        'reg_weight': 0.01
+        'reg_weight': 0.01,
+        'evaluator': evaluator,
+        'topk': config['topk']
     }
 
     trainer = BPRTrainer(trainer_config)
-    trainer.train(epochs=10)
+    trainer.train(epochs=10, eval_dataloader=eval_dataloader, eval_steps=1)
 
 if __name__ == "__main__":
     main()
