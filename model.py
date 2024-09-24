@@ -12,7 +12,8 @@ class BasicModel(nn.Module):
         self.dataset = model_config['dataset']
         self.n_users = self.dataset.n_users
         self.n_items = self.dataset.n_items
-        self.init_parameters()
+        print(f"Number of users: {self.n_users}, Number of items: {self.n_items}")
+       # self.init_parameters()
 
     def init_parameters(self):
         raise NotImplementedError("Subclasses should initialize model parameters.")
@@ -22,9 +23,16 @@ class BasicModel(nn.Module):
 
     def bpr_forward(self, users, pos_items, neg_items):
         rep = self.get_rep()
-        user_rep = rep[users, :]
-        pos_item_rep = rep[self.n_users + pos_items, :]
-        neg_item_rep = rep[self.n_users + neg_items, :]
+        if isinstance(rep, tuple):
+            # 第一个子类的情况，rep 是元组
+            user_rep = rep[0][users, :]  # 从元组中提取 user_rep
+            pos_item_rep = rep[1][pos_items, :]  # 从元组中提取 item_rep
+            neg_item_rep = rep[1][neg_items, :]  # 仍然从 item_rep 中提取
+        else:
+            # 第二个子类的情况，rep 是单一的张量
+            user_rep = rep[users, :]
+            pos_item_rep = rep[self.n_users + pos_items, :]
+            neg_item_rep = rep[self.n_users + neg_items, :]
 
         l2_norm_sq = torch.norm(user_rep, p=2, dim=1) ** 2 + \
                      torch.norm(pos_item_rep, p=2, dim=1) ** 2 + \
@@ -36,9 +44,9 @@ class BasicModel(nn.Module):
         return user_rep, pos_item_rep, neg_item_rep, l2_norm_sq
 
     def predict(self, users):
-        rep = self.get_rep()
-        user_rep = rep[users, :]
-        all_items_rep = rep[self.n_users:, :]
+        user_rep, item_rep = self.get_rep()
+        user_rep = user_rep[users, :]
+        all_items_rep = item_rep[self.n_users:, :]
         scores = torch.mm(user_rep, all_items_rep.t())
         return scores
 
@@ -60,9 +68,11 @@ class VBPR(BasicModel):
         else:
             self.item_raw_features = None  # 当没有特征时的处理
 
+        self.u_embedding = nn.Parameter(torch.empty(self.n_users, self.embedding_size * 2))
+        self.i_embedding = nn.Parameter(torch.empty(self.n_items, self.embedding_size))
+
+        # 物品线性变换层
         self.item_linear = nn.Linear(self.item_raw_features.shape[1], self.embedding_size)
-        self.u_embedding = nn.Parameter(nn.init.xavier_uniform_(torch.empty(self.n_users, self.embedding_size * 2)))
-        self.i_embedding = nn.Parameter(nn.init.xavier_uniform_(torch.empty(self.n_items, self.embedding_size)))
 
         self.init_parameters()
 
