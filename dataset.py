@@ -2,7 +2,8 @@ import numpy as np
 import torch
 import pandas as pd
 import random
-from torch.utils.data import Dataset
+from torch.utils.data import Dataset, random_split
+
 
 def update_ui_sets(u, i, user_inter_sets, item_inter_sets):
     if u in user_inter_sets:
@@ -15,6 +16,7 @@ def update_ui_sets(u, i, user_inter_sets, item_inter_sets):
         item_inter_sets[i] = {u}
 
 
+#
 def update_user_inter_lists(u, i, t, user_map, item_map, user_inter_lists):
     if u in user_map and i in item_map:
         duplicate = False
@@ -56,12 +58,12 @@ class AmazonDataset(Dataset):
         self.t_feat = reindex_feat(self.t_feat, item_map)
 
         self.train_data = self.val_data = self.train_array = None
+        self.train_array = []
+
         self.generate_data(user_inter_lists)
 
-        self.train_array = []
-        for user in range(self.n_users):
-            self.train_array.extend([[user, item] for item in self.train_data[user]])
-
+       # for user in range(self.n_users):
+        #    self.train_array.extend([[user, item] for item in self.train_data[user]])
 
     def process_feat(self, feat_path):
         if feat_path is None:
@@ -98,15 +100,16 @@ class AmazonDataset(Dataset):
         return user_map, item_map
 
     def read_interactions(self, interactions_path):
-        interactions = pd.read_csv(interactions_path, names=['userID', 'itemID', 'rating', 'timestamp'])
+        interactions = pd.read_csv(interactions_path, sep='\t')
+
         user_inter_sets, item_inter_sets = dict(), dict()
-        for u, i, r, _ in interactions:
-            if r > 3.:
+        for u, i, r, t, _ in interactions.itertuples(index=False):
+            if r > 3:
                 update_ui_sets(u, i, user_inter_sets, item_inter_sets)
         user_map, item_map = self.remove_sparse_ui(user_inter_sets, item_inter_sets)
 
         user_inter_lists = [[] for _ in range(self.n_users)]
-        for u, i, r, t in interactions:
+        for u, i, r, t, _ in interactions.itertuples(index=False):
             if r > 3:
                 update_user_inter_lists(u, i, t, user_map, item_map, user_inter_lists)
         return item_map, user_inter_lists
@@ -114,7 +117,6 @@ class AmazonDataset(Dataset):
     def generate_data(self, user_inter_lists):
         self.train_data = [None for _ in range(self.n_users)]
         self.val_data = [None for _ in range(self.n_users)]
-        self.train_array = []
         average_inters = []
         for user in range(self.n_users):
             user_inter_lists[user].sort(key=lambda entry: entry[1])
@@ -123,9 +125,13 @@ class AmazonDataset(Dataset):
 
             n_inter_items = len(user_inter_lists[user])
             average_inters.append(n_inter_items)
-            n_train_items = int(n_inter_items * self.split_ratio[0])
+            n_train_items = int(n_inter_items * self.split_ratio)
             self.train_data[user] = {i_t[0] for i_t in user_inter_lists[user][:n_train_items]}
             self.val_data[user] = {i_t[0] for i_t in user_inter_lists[user][n_train_items:]}
+
+            for item in self.train_data[user]:
+                self.train_array.append([user, item])
+
         average_inters = np.mean(average_inters)
         print('Users {:d}, Items {:d}, Average number of interactions {:.3f}, Total interactions {:.1f}'
               .format(self.n_users, self.n_items, average_inters, average_inters * self.n_users))
@@ -149,12 +155,17 @@ class AmazonDataset(Dataset):
             user = random.randint(0, self.n_users - 1)
 
         pos_item = np.random.choice(list(self.train_data[user]))
-        data_with_negs = np.ones((self.negative_sample_ratio, 3), dtype=np.int64)
-        data_with_negs[:, 0] = user
-        data_with_negs[:, 1] = pos_item
-        data_with_negs[:, 2] = self.get_negative_items(user)
-        return data_with_negs
+        neg_items = self.get_negative_items(user)
+        neg_item = neg_items[0]
+        return user, pos_item, neg_item
 
+    def split(self, ratio):
+        total_len = len(self)
+        train_len = int(total_len * ratio)
+        eval_len = total_len - train_len
+
+        train_dataset, eval_dataset = random_split(self, [train_len, eval_len])
+        return train_dataset, eval_dataset
 
 
 
