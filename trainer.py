@@ -9,6 +9,8 @@ class BPRTrainer:
         self.dataloader = trainer_config['dataloader']
         self.reg_weight = trainer_config['reg_weight']
         self.device = next(self.model.parameters()).device
+        self.evaluator = trainer_config['evaluator']  # 使用TopKEvaluator
+        self.topk = trainer_config['topk']  # Top-K 参数
 
     def train_epoch(self):
         self.model.train()
@@ -39,10 +41,58 @@ class BPRTrainer:
 
         return total_loss
 
-    def train(self, epochs):
+    def evaluate(self, eval_dataloader):
+        self.model.eval()
+        batch_matrix_list = []
+        all_pos_items = []
+        pos_len_list = []
+
+        for batch_users, batch_pos_items, _ in eval_dataloader:
+            batch_users = batch_users.to(self.device)
+            batch_pos_items = batch_pos_items.to(self.device)
+
+            all_pos_items.extend([[item.item()] for item in batch_pos_items])
+            pos_len_list.extend([1] * len(batch_pos_items))
+
+            # 模型对所有物品进行评分预测
+            scores = self.model.predict(batch_users)
+
+            # 处理空的 scores
+            if scores.size(0) == 0 or len(batch_pos_items) == 0:
+                continue
+
+            if batch_pos_items.max() >= scores.size(1):
+                continue
+                
+            scores[torch.arange(scores.size(0)), batch_pos_items] = float('-inf')
+
+            topk_indices = torch.topk(scores, max(self.topk), dim=1)
+            batch_matrix_list.append(topk_indices.cpu().numpy())
+
+        eval_data = EvalData(all_pos_items, pos_len_list)
+
+        results = self.evaluator.evaluate(batch_matrix_list, eval_data)
+        return results
+
+    def train(self, epochs, eval_dataloader=None, eval_steps=1):
         for epoch in range(epochs):
             avg_loss = self.train_epoch()
             print(f"Epoch {epoch + 1}, Average Loss: {avg_loss}")
 
+            # 每隔 eval_steps 评估一次
+            if eval_dataloader and (epoch + 1) % eval_steps == 0:
+                eval_results = self.evaluate(eval_dataloader)
+                print(f"Epoch {epoch + 1}, Evaluation Results: {eval_results}")
 
+
+class EvalData:
+    def __init__(self, pos_items, pos_len_list):
+        self.pos_items = pos_items
+        self.pos_len_list = pos_len_list
+
+    def get_eval_items(self):
+        return self.pos_items
+
+    def get_eval_len_list(self):
+        return self.pos_len_list
 
