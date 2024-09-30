@@ -12,7 +12,6 @@ def main():
         'name': 'elec',
         'device': 'cuda' if torch.cuda.is_available() else 'cpu',
         'split_ratio': 0.8,
-        'negative_sample_ratio': 1,
         'min_inter': 5,
         'image_feat_path': 'data/elec/image_feat.npy',
         'text_feat_path': 'data/elec/text_feat.npy',
@@ -48,7 +47,8 @@ def main():
     optimizer = torch.optim.Adam(model.parameters(), lr=0.001)
 
     dataloader = DataLoader(train_dataset, batch_size=32, shuffle=True)
-    eval_dataloader = DataLoader(eval_dataset, batch_size=32, shuffle=False)
+    # eval_dataloader = DataLoader(eval_dataset, batch_size=32, shuffle=False)
+    # 评估不需要使用一个dataloader, dataloader 主要是采样用的，评估不需要采样
 
     config = {
         'metrics': ['recall', 'precision', 'ndcg'],

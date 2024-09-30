@@ -45,7 +45,6 @@ class AmazonDataset(Dataset):
         self.name = dataset_config['name']
         self.device = dataset_config['device']
         self.split_ratio = dataset_config['split_ratio']
-        self.negative_sample_ratio = dataset_config.get('negative_sample_ratio', 1)
         self.shuffle = dataset_config.get('shuffle', False)
         self.min_interactions = dataset_config['min_inter']
 
@@ -61,9 +60,6 @@ class AmazonDataset(Dataset):
         self.train_array = []
 
         self.generate_data(user_inter_lists)
-
-       # for user in range(self.n_users):
-        #    self.train_array.extend([[user, item] for item in self.train_data[user]])
 
     def process_feat(self, feat_path):
         if feat_path is None:
@@ -136,15 +132,12 @@ class AmazonDataset(Dataset):
         print('Users {:d}, Items {:d}, Average number of interactions {:.3f}, Total interactions {:.1f}'
               .format(self.n_users, self.n_items, average_inters, average_inters * self.n_users))
 
-    def get_negative_items(self, user):
+    def get_negative_item(self, user):
         pos_items = self.train_data[user]
-        neg_items = np.zeros((self.negative_sample_ratio,), dtype=np.int64)
-        for i in range(self.negative_sample_ratio):
+        item = random.randint(0, self.n_items - 1)
+        while item in pos_items:
             item = random.randint(0, self.n_items - 1)
-            while item in pos_items:
-                item = random.randint(0, self.n_items - 1)
-            neg_items[i] = item
-        return neg_items
+        return item
 
     def __len__(self):
         return len(self.train_array)
@@ -155,17 +148,8 @@ class AmazonDataset(Dataset):
             user = random.randint(0, self.n_users - 1)
 
         pos_item = np.random.choice(list(self.train_data[user]))
-        neg_items = self.get_negative_items(user)
-        neg_item = neg_items[0]
+        neg_item = self.get_negative_item(user)
         return user, pos_item, neg_item
-
-    def split(self, ratio):
-        total_len = len(self)
-        train_len = int(total_len * ratio)
-        eval_len = total_len - train_len
-
-        train_dataset, eval_dataset = random_split(self, [train_len, eval_len])
-        return train_dataset, eval_dataset
 
 
 

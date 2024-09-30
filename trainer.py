@@ -10,6 +10,7 @@ class BPRTrainer:
         self.reg_weight = trainer_config['reg_weight']
         self.device = next(self.model.parameters()).device
         self.evaluator = trainer_config['evaluator']  # 使用TopKEvaluator
+        ## optimizer, dataloader, evaluator最好都在这个函数定义，而不是在外面定义好传进来
         self.topk = trainer_config['topk']  # Top-K 参数
 
     def train_epoch(self):
@@ -56,13 +57,6 @@ class BPRTrainer:
 
             # 模型对所有物品进行评分预测
             scores = self.model.predict(batch_users)
-
-            # 处理空的 scores
-            if scores.size(0) == 0 or len(batch_pos_items) == 0:
-                continue
-
-            if batch_pos_items.max() >= scores.size(1):
-                continue
                 
             scores[torch.arange(scores.size(0)), batch_pos_items] = float('-inf')
 
@@ -76,7 +70,7 @@ class BPRTrainer:
 
     def train(self, epochs, eval_dataloader=None, eval_steps=1):
         for epoch in range(epochs):
-            avg_loss = self.train_epoch()
+            avg_loss = self.train_epoch() # 这个函数返回的是total_loss，不是avg
             print(f"Epoch {epoch + 1}, Average Loss: {avg_loss}")
 
             # 每隔 eval_steps 评估一次

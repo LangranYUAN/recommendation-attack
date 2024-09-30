@@ -13,7 +13,7 @@ class BasicModel(nn.Module):
         self.n_users = self.dataset.n_users
         self.n_items = self.dataset.n_items
         print(f"Number of users: {self.n_users}, Number of items: {self.n_items}")
-       # self.init_parameters()
+        self.init_parameters()
 
     def init_parameters(self):
         raise NotImplementedError("Subclasses should initialize model parameters.")
@@ -23,16 +23,9 @@ class BasicModel(nn.Module):
 
     def bpr_forward(self, users, pos_items, neg_items):
         rep = self.get_rep()
-        if isinstance(rep, tuple):
-            # 第一个子类的情况，rep 是元组
-            user_rep = rep[0][users, :]  # 从元组中提取 user_rep
-            pos_item_rep = rep[1][pos_items, :]  # 从元组中提取 item_rep
-            neg_item_rep = rep[1][neg_items, :]  # 仍然从 item_rep 中提取
-        else:
-            # 第二个子类的情况，rep 是单一的张量
-            user_rep = rep[users, :]
-            pos_item_rep = rep[self.n_users + pos_items, :]
-            neg_item_rep = rep[self.n_users + neg_items, :]
+        user_rep = rep[users, :]
+        pos_item_rep = rep[self.n_users + pos_items, :]
+        neg_item_rep = rep[self.n_users + neg_items, :]
 
         l2_norm_sq = torch.norm(user_rep, p=2, dim=1) ** 2 + \
                      torch.norm(pos_item_rep, p=2, dim=1) ** 2 + \
@@ -44,9 +37,9 @@ class BasicModel(nn.Module):
         return user_rep, pos_item_rep, neg_item_rep, l2_norm_sq
 
     def predict(self, users):
-        user_rep, item_rep = self.get_rep()
-        user_rep = user_rep[users, :]
-        all_items_rep = item_rep[self.n_users:, :]
+        rep = self.get_rep()
+        user_rep = rep[users, :]
+        all_items_rep = rep[self.n_users:, :]
         scores = torch.mm(user_rep, all_items_rep.t())
         return scores
 
@@ -56,6 +49,7 @@ class VBPR(BasicModel):
         super(VBPR, self).__init__(model_config)
         self.v_feat = model_config['v_feat']
         self.t_feat = model_config['t_feat']
+        self.dropout = model_config.get('dropout', 0.)
 
         self.embedding_size = model_config['embedding_size']
 
@@ -83,18 +77,14 @@ class VBPR(BasicModel):
         if self.item_linear.bias is not None:
             nn.init.zeros_(self.item_linear.bias)
 
-    def get_rep(self, dropout=0.0):
-        user_rep = F.dropout(self.u_embedding, dropout)
+    def get_rep(self):
+        user_rep = F.dropout(self.u_embedding, self.dropout)
         item_feat_rep = self.item_linear(self.item_raw_features)
-        item_emb_rep = F.dropout(self.i_embedding, dropout)
+        item_emb_rep = F.dropout(self.i_embedding, self.dropout)
 
         # 合并用户表示和物品表示
         item_rep = torch.cat((item_emb_rep, item_feat_rep), dim=1)
-        return user_rep, item_rep
-
-    def forward(self, dropout=0.0):
-        user_rep, item_rep = self.get_rep(dropout)
-        return user_rep, item_rep
+        return torch.cat((user_rep, item_rep), dim=0)
 
 
 class MMGCN(BasicModel):
